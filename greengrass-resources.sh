@@ -164,7 +164,7 @@ if [ "$ACTION" == "-rf" ]; then
   fi
 
   echo "Cleaning up local project files..."
-  rm -rf certs config deployments logs .env Dockerfile greengrass-entrypoint.sh modify-sudoers.sh
+  rm -rf certs config deployments logs .env
 
   echo "--- ✅ Force removal complete! ---"
   exit 0
