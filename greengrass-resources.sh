@@ -31,6 +31,9 @@ function remove_thing() {
   local thing_name_to_remove="$1"
   echo "--- Deleting Thing and its certificates: $thing_name_to_remove ---"
 
+  echo "Deleting Greengrass Core Device '$thing_name_to_remove'..."
+  aws greengrassv2 delete-core-device --core-device-thing-name "$thing_name_to_remove" >/dev/null 2>&1 || true
+
   CERT_ARNS=$(aws iot list-thing-principals --thing-name "$thing_name_to_remove" --query "principals[]" --output text 2>/dev/null || true)
   if [ -n "$CERT_ARNS" ]; then
     for CERT_ARN in $CERT_ARNS; do
@@ -134,7 +137,7 @@ if [ "$ACTION" == "-rf" ]; then
 
   echo "--- Deleting shared resources ---"
 
-  echo "Detaching and deleting policy '$POLICY_NAME' from any remaining targets..."
+  echo "Detaching policy '$POLICY_NAME' from any remaining targets..."
   TARGETS=$(aws iot list-targets-for-policy --policy-name "$POLICY_NAME" --query targets --output text 2>/dev/null || true)
   if [ -n "$TARGETS" ]; then
     for TARGET in $TARGETS; do
@@ -143,19 +146,29 @@ if [ "$ACTION" == "-rf" ]; then
     done
   fi
 
-  echo "Deleting IoT Policy '$POLICY_NAME'..."
-  aws iot delete-policy --policy-name "$POLICY_NAME" || true
-
   echo "Deleting Thing Group '$THING_GROUP_NAME'..."
   aws iot delete-thing-group --thing-group-name "$THING_GROUP_NAME" || true
 
   echo "Deleting Role Alias '$ROLE_ALIAS_NAME'..."
   aws iot delete-role-alias --role-alias "$ROLE_ALIAS_NAME" || true
 
+  # The IoT Policy must be deleted before the IAM role that might reference it via the trust policy.
+  echo "Deleting IoT Policy '$POLICY_NAME'..."
+  aws iot delete-policy --policy-name "$POLICY_NAME" >/dev/null 2>&1 || true
+
   echo "Deleting IAM Role '$ROLE_NAME'..."
-  aws iam detach-role-policy --role-name "$ROLE_NAME" --policy-arn arn:aws:iam::aws:policy/service-role/AWSGreengrassResourceAccessRolePolicy || true
-  sleep 3 # give time for detachment to propagate
-  aws iam delete-role --role-name "$ROLE_NAME" || true
+  # List and detach all policies attached to the role
+  ATTACHED_POLICIES=$(aws iam list-attached-role-policies --role-name "$ROLE_NAME" --query 'AttachedPolicies[*].PolicyArn' --output text 2>/dev/null || true)
+  if [ -n "$ATTACHED_POLICIES" ]; then
+      echo "Detaching the following policies: $ATTACHED_POLICIES"
+      for POLICY_ARN in $ATTACHED_POLICIES; do
+          aws iam detach-role-policy --role-name "$ROLE_NAME" --policy-arn "$POLICY_ARN" >/dev/null 2>&1 || true
+      done
+      echo "Waiting for policies to detach..."
+      sleep 10
+  fi
+
+  aws iam delete-role --role-name "$ROLE_NAME" >/dev/null 2>&1 || true
 
   echo "Emptying and deleting S3 bucket '$S3_BUCKET'..."
   if aws s3api head-bucket --bucket "$S3_BUCKET" >/dev/null 2>&1; then
